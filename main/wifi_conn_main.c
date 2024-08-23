@@ -21,42 +21,47 @@ library. Depends on only FreeRTOS and the standard ESP32 libraries
 #include "esp_log.h"
 
 #define QEMU_AP
-// #undef QEMU_AP
+#undef QEMU_AP
 
 // Defining connection parameters
-#ifdef QEMU_AP
-#define WIFI_SSID "Espressif"
-#define WIFI_PASS ""
-#else
+// #ifdef QEMU_AP
+// #define WIFI_SSID "Espressif"
+// #define WIFI_PASS ""
+// #else
 #define WIFI_SSID "ResPECT"
 #define WIFI_PASS "twoflower"
-#endif
+// #endif
 
 #define SCAN_AUTH_MODE_THRESHOLD ESP_WIFI_AUTH_WPA2_PSK // Not used since it is default
 #define MAX_RETRY 5
 
-typedef uint8_t macaddr_t[6];
+// Register definitions
+#define WIFI_TX_CONFIG 0x60033d04
+#define WIFI_MAC_CTRL 0x60033ca0
+#define WIFI_TX_PLCP0 0x60033d08
 
-// Struct for 80211 packet format
-typedef struct mac80211_frame {
-    struct mac80211_frame_control {
-        unsigned    protocol_version    : 2;
-        unsigned    type            : 2;
-        unsigned    sub_type        : 4;
-        unsigned    to_ds           : 1;
-        unsigned    from_ds         : 1;
-        unsigned    _flags:6;
-    } __attribute__((packed)) frame_control;
-    uint16_t  duration_id;
-    macaddr_t receiver_address;
-    macaddr_t transmitter_address;
-    macaddr_t address_3;
-    struct mac80211_sequence_control {
-        unsigned    fragment_number     : 4;
-        unsigned    sequence_number     : 12;
-    } __attribute__((packed));
-    uint8_t data_and_fcs[2316];
-}  __attribute__((packed)) mac80211_frame;
+// typedef uint8_t macaddr_t[6];
+
+// // Struct for 80211 packet format
+// typedef struct mac80211_frame {
+//     struct mac80211_frame_control {
+//         unsigned    protocol_version    : 2;
+//         unsigned    type            : 2;
+//         unsigned    sub_type        : 4;
+//         unsigned    to_ds           : 1;
+//         unsigned    from_ds         : 1;
+//         unsigned    _flags:6;
+//     } __attribute__((packed)) frame_control;
+//     uint16_t  duration_id;
+//     macaddr_t receiver_address;
+//     macaddr_t transmitter_address;
+//     macaddr_t address_3;
+//     struct mac80211_sequence_control {
+//         unsigned    fragment_number     : 4;
+//         unsigned    sequence_number     : 12;
+//     } __attribute__((packed));
+//     uint8_t data_and_fcs[2316];
+// }  __attribute__((packed)) mac80211_frame;
 
 typedef struct dma_list_item {
 	uint16_t size : 12;
@@ -66,7 +71,7 @@ typedef struct dma_list_item {
 	uint8_t owner : 1; // What does this mean?
 	void* packet;
 	struct dma_list_item* next;
-} __attribute__((packed)) dma_list_item;
+} __attribute__((packed,aligned(4))) dma_list_item_t;
 
 extern bool pp_post(uint32_t requestnum, uint32_t argument);
 
@@ -74,10 +79,10 @@ esp_err_t ret;
 
 uint8_t s_retry_num = 0;
 
-// Hand crafted UDP packet
-const uint8_t packet[] = {
+// // Hand crafted UDP packet
+const uint8_t udp_packet[] = {
     // MAC layer
-    0x74, 0xdf, 0xbf, 0xa4, 0xf7, 0x97, // Destination MAC address
+    0xc8, 0x15, 0x4e, 0xd4, 0x65, 0x1b,
     0x84, 0xf7, 0x03, 0x60, 0x81, 0x5c, // Source MAC address
     0x08, 0x00, // protocol type - IPV4
     
@@ -89,9 +94,9 @@ const uint8_t packet[] = {
     0x00, 0x00, // Flags and fragment offset
     0x05, // TTL
     0x11, // Protocol type UDP 
-    0x33, 0x55, // Header checksum (update after calculating length of total packet)
+    0x33, 0x4a, // Header checksum (update after calculating length of total packet)
     0xc0, 0xa8, 0x00, 0x7A, // Source IP address - Arbitrary IP address for the ESP-32
-    0xc0, 0xa8, 0x00, 0xb7, // Destination IP address - Laptop's IP address (assigned through DHCP by the router)
+    0xc0, 0xa8, 0x00, 0xb8, // Destination IP address - Laptop's IP address (assigned through DHCP by the router)
 
     // UDP header - 8 bytes
     0x1f, 0x45, // Source port - Both source and destination ports are random since it is UDP
@@ -102,7 +107,27 @@ const uint8_t packet[] = {
 
 };
 
+// MAC 802.11 frame captured from the blobs for the above UDP datagram
+uint8_t packet[] = {
+    0x57, 0x00, 0x11, 0x00, 0x0f, 0x0f, 0x00, 0x00, 0x88, 0x41, 0x30, 0x00, 
+    0x40, 0x9b, 0xcd, 0x25, 0x2a, 0xf8, 0x84, 0xf7, 0x03, 0x60, 0x81, 0x5c, 
+    0xc8, 0x15, 0x4e, 0xd4, 0x65, 0x1b, 0x10, 0x01, 0x00, 0x00, 0x36, 0x00, 
+    0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 
+    0x08, 0x00, 0x45, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00, 0x00, 0x05, 0x11, 
+    0x33, 0x55, 0xc0, 0xa8, 0x00, 0x7a, 0xc0, 0xa8, 0x00, 0xb7, 0x1f, 0x45, 
+    0xf0, 0xf0, 0x00, 0x0d, 0x00, 0x00, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xef, 
+    0xbe, 0xad, 0xde, 0x3f, 0x78, 0x00, 0x00, 0x00, 0xf0, 0x4e, 0xc9
+};
 
+dma_list_item_t tx_item = {
+    .size = 83,
+    .length = 95,
+    ._unknown = 32,
+    .has_data = 1,
+    .owner = 1,
+    .packet = &packet[0],
+    .next = NULL
+};
 
 // Event handlers for connecting to the wifi. If event notifies that station is started, perform connection
 // esp_wifi_connect() is part of the blobs
@@ -163,7 +188,26 @@ void app_main(){
 
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
-    ESP_LOGW("main", "Killing proprietary wifi task (ppTask)");
-	pp_post(0xf, 0);
+    // ESP_LOGW("main", "Killing proprietary wifi task (ppTask)");
+	// pp_post(0xf, 0);
+
+    // // ic_mac_init decompilation
+    // uint32_t mac_val = REG_READ(WIFI_MAC_CTRL);
+    // REG_WRITE(WIFI_MAC_CTRL, mac_val &  0xff00efff);
+
+    while(1){
+
+        // // Write 0xa to the last byte (why? - to enable tx?)
+        // uint32_t cfg_val = REG_READ(WIFI_TX_CONFIG);
+        // REG_WRITE(WIFI_TX_CONFIG, cfg_val | 0xa);
+
+        // // Write the address of DMA struct to PLCP0 and set the 6th bit to 6 (why?)
+        // REG_WRITE(WIFI_TX_PLCP0, ((uint32_t)&tx_item & 0xfffff) | 0x600000);
+
+        ret = esp_wifi_internal_tx(WIFI_IF_STA, &udp_packet[0], sizeof(udp_packet));
+        ESP_LOGI("main", "Set with result %s", esp_err_to_name(ret));
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
+        
+    }
 
 }

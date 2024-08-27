@@ -37,6 +37,9 @@ library. Depends on only FreeRTOS and the standard ESP32 libraries
 #define WIFI_TX_PLCP1_2 0x600342fc
 #define WIFI_TX_PLCP2 0x60034314
 #define WIFI_TX_DURATION 0x60034318
+// #define WIFI_DMA_INT_STATUS 0x60033c3c
+// #define WIIF_DMA_INT_CLR 0x60033c40
+#define WIFI_TXQ_GET_STATE 0x60033cb0
 
 #define SEND_RAW
 
@@ -110,16 +113,39 @@ const uint8_t udp_packet[] = {
 
 };
 #else
-// MAC 802.11 frame captured from the blobs for the above UDP datagram
+// esp32-open-mac frame format
 uint8_t packet[] = {
-    0x88, 0x41, 0x2c, 0x00, 0x40, 0x9b, 0xcd, 0x25, 0x2a, 0xf8, 0x84, 0xf7,
-    0x03, 0x60, 0x81, 0x5c, 0xc8, 0x15, 0x4e, 0xd4, 0x65, 0x1b, 0x00, 0x00, 
-    0x00, 0x00, 0x03, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0xbe, 0x00, 
-    0x78, 0x8b, 0xa8, 0x7c, 0x41, 0x7b, 0xa3, 0xe1, 0x0b, 0xb4, 0xa0, 0xf5, 
-    0x59, 0x08, 0x6b, 0x71, 0x44, 0x8e, 0x17, 0xd0, 0x58, 0x70, 0x60, 0x0a,
-    0x7c, 0x7e, 0xed, 0xf8, 0xc2, 0x8b, 0x8d, 0x32, 0x1d, 0x8b, 0x77, 0xb3, 
-    0x61, 0xcd, 0xc7, 0x1d, 0x75, 0x13, 0x13, 0x08, 0xcc, 0x83, 0xfb, 0xd4, 
-    0x7f, 0x73, 0xde
+    0x08, 0x01, // frame control
+    0x00, 0x00, // duration/ID
+    0xc8, 0x15, 0x4e, 0xd4, 0x65, 0x1b, 
+    0x84, 0xf7, 0x03, 0x60, 0x81, 0x5c, 
+    0x40, 0x9b, 0xcd, 0x25, 0x2a, 0xf8,    
+    0x00, 0x00, // sequence control
+    0xaa, 0xaa, // SNAP
+    0x03, 0x00, 0x00, 0x00, // other LLC headers
+    0x08, 0x00,
+    // IPv4 header
+    0x45, //version :4 (obv) with IHL = 5
+    0x00, // DSCP and ECN
+    0x00, 0x21, // Total length (33 bytes), IPv4 Header + UDP Header + "Hello"
+    0x00, 0x00, // Identification and fragmentation data
+    0x00, 0x00, // Flags and fragment offset
+    0x05, // TTL
+    0x11, // Protocol type UDP 
+    0x33, 0x55, // Header checksum (update after calculating length of total packet)
+    0xc0, 0xa8, 0x00, 0x7A, // Source IP address - Arbitrary IP address for the ESP-32
+    0xc0, 0xa8, 0x00, 0xb7, // Destination IP address - Laptop's IP address (assigned through DHCP by the router)
+
+    // UDP header - 8 bytes
+    0x1f, 0x45, // Source port - Both source and destination ports are random since it is UDP
+    0xf0, 0xf0, // Destination port
+    0x00, 0x0d, // Length
+    0x00, 0x00,  // Checksum - calculate using the pseudo ipv4 header
+    'h', 'e', 'l', 'l', 'o', // The message :)
+
+    // FCS
+    0x00, 0x00, 0x00, 0x00
+
 };
 
 dma_list_item_t tx_item = {
@@ -214,16 +240,16 @@ void app_main(){
         ESP_LOGI("WIFI_REG", "Value in %08x: %08x", (unsigned int)WIFI_TX_CONFIG, (unsigned int)REG_READ(WIFI_TX_CONFIG));
 
         // Write the address of DMA struct to PLCP0 and set the 6th byte to 6 (why?) and 7th byte to 1 (why?)
-        REG_WRITE(WIFI_TX_PLCP0, ((uint32_t)&tx_item & 0xfffff) | 0x600000);
+        REG_WRITE(WIFI_TX_PLCP0, (((uint32_t)&tx_item & 0xfffff) | 0x600000) | 0x01000000);
         ESP_LOGI("WIFI_REG", "Value in %08x: %08x", (unsigned int)WIFI_TX_PLCP0, (unsigned int)REG_READ(WIFI_TX_PLCP0));
 
         // Copied from Qemu output. Something to do with length of the packet
         uint32_t rate = WIFI_PHY_RATE_54M;
         uint32_t is_n_enabled = (rate >= 16);
-        REG_WRITE(WIFI_TX_PLCP1, 0x10000000 | (0x5f & 0xfff) | ((rate & 0x1f) << 12) | ((is_n_enabled & 0b1) << 25));
+        REG_WRITE(WIFI_TX_PLCP1, 0x10000000 | (tx_item.length & 0xfff) | ((rate & 0x1f) << 12) | ((is_n_enabled & 0b1) << 25));
         ESP_LOGI("WIFI_REG", "Value in %08x: %08x", (unsigned int)WIFI_TX_PLCP1, (unsigned int)REG_READ(WIFI_TX_PLCP1));
 
-        REG_WRITE(WIFI_TX_PLCP1_2, 0x00);
+        REG_WRITE(WIFI_TX_PLCP1_2, 0x0010000);
         ESP_LOGI("WIFI_REG", "Value in %08x: %08x", (unsigned int)WIFI_TX_PLCP1_2, (unsigned int)REG_READ(WIFI_TX_PLCP1_2));
 
         // Write 0x00000020 (why?)
@@ -234,10 +260,11 @@ void app_main(){
         REG_WRITE(WIFI_TX_DURATION, 0x00);
         ESP_LOGI("WIFI_REG", "Value in %08x: %08x", (unsigned int)WIFI_TX_DURATION, (unsigned int)REG_READ(WIFI_TX_DURATION));
 
-        // Setting some more unknown configurations
+        // // Configure EDCA
         cfg_val = REG_READ(WIFI_TX_CONFIG);
         ESP_LOGI("WIFI_REG", "Value in %08x: %08x", (unsigned int)WIFI_TX_CONFIG, (unsigned int)REG_READ(WIFI_TX_CONFIG));
         cfg_val = cfg_val | 0x02000000;
+        
         cfg_val = cfg_val | 0x00003000;
         REG_WRITE(WIFI_TX_CONFIG, cfg_val);
         ESP_LOGI("WIFI_REG", "Value in %08x: %08x", (unsigned int)WIFI_TX_CONFIG, (unsigned int)REG_READ(WIFI_TX_CONFIG));
@@ -247,6 +274,10 @@ void app_main(){
         cfg_val = REG_READ(WIFI_TX_PLCP0);
         REG_WRITE(WIFI_TX_PLCP0, cfg_val | 0xc0000000);
         ESP_LOGI("WIFI_REG", "Value in %08x: %08x", (unsigned int)WIFI_TX_PLCP0, (unsigned int)REG_READ(WIFI_TX_PLCP0));
+
+        // Read from status register
+        uint32_t wifi_state = REG_READ(WIFI_TXQ_GET_STATE);
+        ESP_LOGI("WIFI_REG", "Wifi txq status %08x", (unsigned int)wifi_state);
 #else
         ret = esp_wifi_internal_tx(WIFI_IF_STA, &udp_packet[0], sizeof(udp_packet));
         ESP_LOGI("Main:", "Sent with result %s", esp_err_to_name(ret));

@@ -186,7 +186,7 @@ void app_main(){
     wifi_config_t wifi_config = {
         .sta = {
             .ssid = CONFIG_ESP_WIFI_SSID,
-            .password = CONFIG_ESP_WIFI_PASS,
+            .password = CONFIG_ESP_WIFI_PASSWORD,
         },
     };
 

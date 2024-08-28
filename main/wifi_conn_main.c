@@ -219,8 +219,9 @@ void app_main(){
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
     #ifdef SEND_RAW
-    ESP_LOGW("main", "Killing proprietary wifi task (ppTask)");
-	pp_post(0xf, 0);
+    ESP_LOGW("Main", "Sending Raw packets");
+    // ESP_LOGW("main", "Killing proprietary wifi task (ppTask)");
+	// pp_post(0xf, 0);
 
 
     // // ic_mac_init decompilation
@@ -230,7 +231,7 @@ void app_main(){
     #endif 
 
     while(1){
-        ESP_LOGI("Main:", "Trying to send");
+        ESP_LOGI("Main", "Trying to send");
 
 #ifdef SEND_RAW
         // Write 0xa to the last byte (why? - to enable tx?)
@@ -274,10 +275,6 @@ void app_main(){
         cfg_val = REG_READ(WIFI_TX_PLCP0);
         REG_WRITE(WIFI_TX_PLCP0, cfg_val | 0xc0000000);
         ESP_LOGI("WIFI_REG", "Value in %08x: %08x", (unsigned int)WIFI_TX_PLCP0, (unsigned int)REG_READ(WIFI_TX_PLCP0));
-
-        // Read from status register
-        uint32_t wifi_state = REG_READ(WIFI_TXQ_GET_STATE);
-        ESP_LOGI("WIFI_REG", "Wifi txq status %08x", (unsigned int)wifi_state);
 #else
         ret = esp_wifi_internal_tx(WIFI_IF_STA, &udp_packet[0], sizeof(udp_packet));
         ESP_LOGI("Main:", "Sent with result %s", esp_err_to_name(ret));

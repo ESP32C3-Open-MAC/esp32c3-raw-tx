@@ -1,4 +1,4 @@
-# Minimal connection to a WiFi AP
+# Raw WiFi Tx
 ESP-IDF project to send data packets using an "open source" tx function. The project follows from the developments in the [ESP32 Open MAC](https://esp32-open-mac.be/) project. 
 
 In `respect_raw_tx()` A hand crafted IEEE 802.11 packet is transmitted by register manipulation. A DMA struct is required to provide metadata about the packet to the registers.

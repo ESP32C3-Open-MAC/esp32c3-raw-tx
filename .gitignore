@@ -2,3 +2,5 @@ build/*
 *.old
 .vscode/settings.json
 temp/
+sdkconfig
+sdkconfig.ci

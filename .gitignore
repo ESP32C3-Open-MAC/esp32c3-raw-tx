@@ -1,4 +1,4 @@
-build/*
+build/
 *.old
 .vscode/settings.json
 temp/

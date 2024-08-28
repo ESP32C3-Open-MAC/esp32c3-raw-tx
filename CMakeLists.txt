@@ -14,4 +14,4 @@ set(COMPONENTS "cxx" "newlib" "freertos" "esp_hw_support" "heap" "log" "soc"
 list(APPEND COMPONENTS "esp_event" "esp_wifi" "esp_phy" "wpa_supplicant" "main")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(wifi-conn-minimal)
+project(wifi-raw-tx)

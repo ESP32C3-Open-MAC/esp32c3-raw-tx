@@ -26,7 +26,6 @@ Registers that have been identified are listed below
 | WIFI_TX_PLCP1_2  | 0x600342fc |
 | WIFI_TX_PLCP2    | 0x60034314 |
 | WIFI_TX_DURATION | 0x60034318 |
-|
 
 This currently relies on the proprietary wifi thread running in the background for handling interrupts.
 

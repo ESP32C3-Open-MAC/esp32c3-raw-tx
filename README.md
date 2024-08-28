@@ -1,22 +1,40 @@
 # Minimal connection to a WiFi AP
-ESP-IDF project to configure the ESP32-C3 in WiFi mode in Station mode with the minimal code possible from the official ESP-32 drivers. Ideally, the device must not be able to do DHCP discover or ARP requests/requests by itself.
+ESP-IDF project to send data packets using an "open source" tx function. The project follows from the developments in the [ESP32 Open MAC](https://esp32-open-mac.be/) project. 
 
-## Notes:
- - The following settings were configured in the SDK menuconfig
-    - Store Phy calibration data was unchecked
-    - WiFi NVS Flash was unchecked
- - esp_wifi component
-    - A clone of the esp-idf version was created in the local components folder.
-    - CMakeLists was updated to only build the esp_wifi.c source. The rest of the sources were removed for the sake of brevity. esp_wifi.c source only consists of direct calls to the internal blob API. Refer to esp_wifi/CMakeLists.txt for more comments (prefixed with "IM:").
-    - esp_wifi is dependent on freertos or a similar pre-emptive RTOS. It needs to be provided with stubs for memory allocation (malloc), creating and writing to queue, mutexes and other functions. Refer to components/esp_wifi/esp32c3/esp_adapter.c for more information.
- - CMakeLists configuration
-    - Dependencies were explicitly set to make sure a minimal build was achievable (see CMakeLists.txt in main folder for the dependency list). By default ESP-IDF builds the full set of dependencies. This was done to make sure that the project could compile without esp-netif and lwip.
-    - Additional dependencies specified for WiFi connectivity.
- - The current firmware only transmits. A callback for reception has not been registered. Therefore, no rx events will be triggered. esp-netif usually takes care of all of this.
+In `respect_raw_tx()` A hand crafted IEEE 802.11 packet is transmitted by register manipulation. A DMA struct is required to provide metadata about the packet to the registers.
+
+```
+typedef struct dma_list_item {
+	uint16_t size : 12;
+	uint16_t length : 12;
+	uint8_t _unknown : 6;
+	uint8_t has_data : 1;
+	uint8_t owner : 1; 
+	void* packet;
+	struct dma_list_item* next;
+} __attribute__((packed,aligned(4))) dma_list_item_t;
+```
+
+Registers that have been identified are listed below
+
+|                  |            |
+| ---------------- | ---------- |
+| WIFI_TX_CONFIG   | 0x60033d04 |
+| WIFI_MAC_CTRL    | 0x60033ca0 |
+| WIFI_TX_PLCP0    | 0x60033d08 |
+| WIFI_TX_PLCP1    | 0x600342f8 |
+| WIFI_TX_PLCP1_2  | 0x600342fc |
+| WIFI_TX_PLCP2    | 0x60034314 |
+| WIFI_TX_DURATION | 0x60034318 |
+|
+
+This currently relies on the proprietary wifi thread running in the background for handling interrupts.
 
 ## Testing:
  - Connected ESP32 and laptop to a WiFi network without internet access.
- - Used Wireshark to identify the repeated UDP packets.
+ - Used Wireshark to identify the repeated UDP packets. Currently only identifiable in monitor mode (TODO).
 
 ## TODO:
- - Testing other functions of esp_wifi blobs defined in components/esp_wifi/include/esp_private/wifi.h and components/esp_wifi/include/esp_wifi.h
+ - Port the functionality in the ESP32 Open MAC project by setting up own interrupts.
+ - Next goal is to achieve TX independent of the proprietary thread.
+ - RX needs to be integrated. Registers not yet identified

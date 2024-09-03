@@ -21,7 +21,19 @@ FreeRTOS is still needed
 #include "esp_err.h"
 #include "esp_log.h"
 
+// Interrupt configuration
+#include "rom/ets_sys.h"
+#include "soc/interrupts.h"
+#include "riscv/interrupt.h"
+
+// WDT disabling
+#include "hal/wdt_hal.h"
+#include "hal/gpio_hal.h"
+
 #include "sdkconfig.h"
+
+// https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/system/intr_alloc.html
+#define RV_EXTERNAL_INT_COUNT 31
 
 #define MAX_RETRY 5
 
@@ -33,6 +45,15 @@ FreeRTOS is still needed
 #define WIFI_TX_PLCP1_2 0x600342fc
 #define WIFI_TX_PLCP2 0x60034314
 #define WIFI_TX_DURATION 0x60034318
+#define WIFI_TX_STATUS 0x60033cb0
+#define WIFI_TX_CLR 0x60033cac
+#define WIFI_INT_STATUS_GET 0x60033c3c
+#define WIFI_INT_STATUS_CLR 0x60033c40
+
+// Interrupt number 1 seems to be set during esp_wifi_start()
+#define WIFI_INTR_NUMBER 1
+
+// #define USE_PROPRIETARY
 
 typedef struct dma_list_item {
 	uint16_t size : 12;
@@ -44,9 +65,24 @@ typedef struct dma_list_item {
 	struct dma_list_item* next;
 } __attribute__((packed,aligned(4))) dma_list_item_t;
 
+// RTOS functions
+extern bool pp_post(uint32_t requestnum, uint32_t argument);
+
+// extern void ic_clear_interrupt_handler(void);
+// extern void hal_init(void);
+
+typedef struct {
+    intr_handler_t handler;
+    void *arg;
+} intr_handler_item_t;
+
+extern intr_handler_item_t s_intr_handlers[1][RV_EXTERNAL_INT_COUNT];
+
 esp_err_t ret;
 
 uint8_t s_retry_num = 0;
+
+volatile int interrupt_count = 0;
 
 // Hand crafted 80211 packet. Currently only visible in airmon-ng
 uint8_t packet[] = {
@@ -54,9 +90,9 @@ uint8_t packet[] = {
     0x00, 0x00, // duration/ID
 
     // Replace with required MAC addresses
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Receiver address
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Transmitter address
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Destination address
+    0x40, 0x9b, 0xcd, 0x25, 0x2a, 0xf8, // Receiver address
+    0x84, 0xf7, 0x03, 0x60, 0x81, 0x5c, // Transmitter address
+    0xc8, 0x15, 0x4e, 0xd4, 0x65, 0x1b, // Destination address
     
     0x00, 0x00, // sequence control
     0xaa, 0xaa, // SNAP
@@ -116,6 +152,55 @@ void event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
+// Process Txqcomplete
+static void processTxComplete() {
+	uint32_t txq_state_complete = REG_READ(WIFI_TX_STATUS);
+	if (txq_state_complete == 0) {
+		return;
+	}
+	uint32_t slot = 31 - __builtin_clz(txq_state_complete);
+	uint32_t clear_mask = 1 << slot;
+    uint32_t wifi_tx_clr = REG_READ(WIFI_TX_CLR);
+	REG_WRITE(WIFI_TX_CLR,  wifi_tx_clr |= clear_mask);
+}
+
+// esp32-open-mac interrupt handler
+void IRAM_ATTR wifi_interrupt_handler(void){
+    // interrupt_count++;
+    // asm volatile("mret");
+    // return;
+    gpio_hal_context_t gpio_hal = {
+        .dev = GPIO_HAL_GET_HW(GPIO_PORT_0)
+    };
+    // gpio_hal_set_level(&gpio_hal, 3, 0);
+    uint32_t cause = REG_READ(WIFI_INT_STATUS_GET);
+
+    if(cause == 0){
+        return;
+    }
+
+    REG_WRITE(WIFI_INT_STATUS_CLR, cause);
+    
+    if(cause & 0x80){
+        processTxComplete();
+    }else{
+        // Do nothing for now. process interrupts and failures/collisions
+    }
+    gpio_hal_set_level(&gpio_hal, 3, 0);
+    return;
+}
+
+void respect_setup_interrupt(){
+    // ic_set_interrupt_handler() in ghidra
+
+    REG_WRITE(0x600c2008, 0);
+    esprv_intc_int_disable((1 << WIFI_INTR_NUMBER) ^ 0xffffffff);
+    intr_handler_set(WIFI_INTR_NUMBER, (intr_handler_t)wifi_interrupt_handler, 0);
+    esprv_intc_int_enable(1 << WIFI_INTR_NUMBER);
+
+}
+
+
 void respect_mac_init(){
     // ic_mac_init decompilation
     uint32_t mac_val = REG_READ(WIFI_MAC_CTRL);
@@ -155,6 +240,7 @@ void respect_raw_tx(dma_list_item_t* tx_item){
     // Finally enable tx
     cfg_val = REG_READ(WIFI_TX_PLCP0);
     REG_WRITE(WIFI_TX_PLCP0, cfg_val | 0xc0000000);
+    ESP_LOGI("raw_tx", "Enabled TX");
 }
 
 
@@ -167,10 +253,12 @@ void app_main(){
     cfg.nvs_enable = false;
 
     // initialize WiFi. This may have some hardware settings. Part of the .a files
+    ESP_LOGI("main", "Wifi init");
     ret = esp_wifi_init(&cfg);
     if(ret != ESP_OK){
         ESP_LOGE("Main", "Wifi could not be initialized %s", esp_err_to_name(ret));
     }
+    ESP_LOGI("main", "Wifi init done");
 
     // Create the event loop to monitor the wifi events such as connecting and station
     // Declare the handlers for connecting to event.
@@ -201,16 +289,49 @@ void app_main(){
     ESP_LOGW("Main", "Sending Raw packets");
 
     // Killing proprietary wifi task seems to prevent any tx
-    // ESP_LOGW("main", "Killing proprietary wifi task (ppTask)");
-	// pp_post(0xf, 0);
+#ifndef USE_PROPRIETARY
 
+    // ESP_LOGW("main", "Killing proprietary wifi task (ppTask)");
+	pp_post(0xf, 0); 
+    respect_setup_interrupt();
+
+#endif
+
+    const int gpio_num = 3;
+
+    // Initialize the GPIO
+    gpio_hal_context_t gpio_hal = {
+        .dev = GPIO_HAL_GET_HW(GPIO_PORT_0)
+    };
+    gpio_hal_func_sel(&gpio_hal, gpio_num, PIN_FUNC_GPIO);
+    gpio_hal_output_enable(&gpio_hal, gpio_num);
+    gpio_hal_set_level(&gpio_hal, 3, 1);
+
+    ESP_LOGI("Main", "Mac init...");
     respect_mac_init();
 
-    while(1){
-        ESP_LOGI("Main", "Trying to send");
+    // Disabling WDTs for debugging 
+    wdt_hal_context_t mwdt_ctx = {.inst = WDT_MWDT1, .mwdt_dev = &TIMERG1};
+    wdt_hal_write_protect_disable(&mwdt_ctx);
+    wdt_hal_disable(&mwdt_ctx);    
 
-        respect_raw_tx(&tx_item);
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
+    wdt_hal_context_t mwdt_ctx2 = {.inst = WDT_MWDT0, .mwdt_dev = &TIMERG0};
+    wdt_hal_write_protect_disable(&mwdt_ctx2);
+    wdt_hal_disable(&mwdt_ctx2);
+
+    for(long int i = 0; i < 300000; i++){
+        asm volatile("nop");
     }
 
+    while(1){
+        // gpio_hal_set_level(&gpio_hal, gpio_num, 0);
+        // vTaskDelay(1000 / portTICK_PERIOD_MS);
+        ESP_LOGI("Main", "Sending packet");
+        respect_raw_tx(&tx_item);
+        gpio_hal_set_level(&gpio_hal, gpio_num, 1);
+        // vTaskDelay(100 / portTICK_PERIOD_MS);
+        // for(long int i = 0; i < 3000000; i++){
+        //     asm volatile("nop");
+        // }
+    }
 }

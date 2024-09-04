@@ -27,7 +27,6 @@ FreeRTOS is still needed
 #include "riscv/interrupt.h"
 
 // WDT disabling
-#include "hal/wdt_hal.h"
 #include "hal/gpio_hal.h"
 
 #include "sdkconfig.h"
@@ -38,6 +37,7 @@ FreeRTOS is still needed
 #define MAX_RETRY 5
 
 // Register definitions
+// MAC registers
 #define WIFI_TX_CONFIG 0x60033d04
 #define WIFI_MAC_CTRL 0x60033ca0
 #define WIFI_TX_PLCP0 0x60033d08
@@ -50,7 +50,11 @@ FreeRTOS is still needed
 #define WIFI_INT_STATUS_GET 0x60033c3c
 #define WIFI_INT_STATUS_CLR 0x60033c40
 
-// Interrupt number 1 seems to be set during esp_wifi_start()
+// Intererupt registers
+#define INTR_SRC_MAC 0x600c2000
+#define INTR_SRC_PWR 0x600c2008
+
+// Using interrupt number 1
 #define WIFI_INTR_NUMBER 1
 
 // #define USE_PROPRIETARY
@@ -154,6 +158,11 @@ void event_handler(void *arg, esp_event_base_t event_base,
 
 // Process Txqcomplete
 static void processTxComplete() {
+    gpio_hal_context_t gpio_hal = {
+        .dev = GPIO_HAL_GET_HW(GPIO_PORT_0)
+    };
+    gpio_hal_set_level(&gpio_hal, 3, 1);
+
 	uint32_t txq_state_complete = REG_READ(WIFI_TX_STATUS);
 	if (txq_state_complete == 0) {
 		return;
@@ -162,6 +171,7 @@ static void processTxComplete() {
 	uint32_t clear_mask = 1 << slot;
     uint32_t wifi_tx_clr = REG_READ(WIFI_TX_CLR);
 	REG_WRITE(WIFI_TX_CLR,  wifi_tx_clr |= clear_mask);
+    gpio_hal_set_level(&gpio_hal, 3, 0);
 }
 
 // esp32-open-mac interrupt handler
@@ -172,7 +182,8 @@ void IRAM_ATTR wifi_interrupt_handler(void){
     gpio_hal_context_t gpio_hal = {
         .dev = GPIO_HAL_GET_HW(GPIO_PORT_0)
     };
-    // gpio_hal_set_level(&gpio_hal, 3, 0);
+    
+    gpio_hal_set_level(&gpio_hal, 3, 0);
     uint32_t cause = REG_READ(WIFI_INT_STATUS_GET);
 
     if(cause == 0){
@@ -186,17 +197,26 @@ void IRAM_ATTR wifi_interrupt_handler(void){
     }else{
         // Do nothing for now. process interrupts and failures/collisions
     }
-    gpio_hal_set_level(&gpio_hal, 3, 0);
+
+    gpio_hal_set_level(&gpio_hal, 3, 1);
+    
     return;
 }
 
 void respect_setup_interrupt(){
     // ic_set_interrupt_handler() in ghidra
+    // Mask out power interrupt and the MAC interrupt sources (temporarily)
+    // From decompilation of intr_matrix_set
+    REG_WRITE(INTR_SRC_MAC, 0);
+    REG_WRITE(INTR_SRC_PWR, 0);
 
-    REG_WRITE(0x600c2008, 0);
+    // Disable the CPU interrupt and renable after setting the handler
     esprv_intc_int_disable((1 << WIFI_INTR_NUMBER) ^ 0xffffffff);
     intr_handler_set(WIFI_INTR_NUMBER, (intr_handler_t)wifi_interrupt_handler, 0);
     esprv_intc_int_enable(1 << WIFI_INTR_NUMBER);
+
+    // Enable the interrupt source again
+    REG_WRITE(INTR_SRC_MAC, WIFI_INTR_NUMBER);
 
 }
 
@@ -310,28 +330,11 @@ void app_main(){
     ESP_LOGI("Main", "Mac init...");
     respect_mac_init();
 
-    // Disabling WDTs for debugging 
-    wdt_hal_context_t mwdt_ctx = {.inst = WDT_MWDT1, .mwdt_dev = &TIMERG1};
-    wdt_hal_write_protect_disable(&mwdt_ctx);
-    wdt_hal_disable(&mwdt_ctx);    
-
-    wdt_hal_context_t mwdt_ctx2 = {.inst = WDT_MWDT0, .mwdt_dev = &TIMERG0};
-    wdt_hal_write_protect_disable(&mwdt_ctx2);
-    wdt_hal_disable(&mwdt_ctx2);
-
-    for(long int i = 0; i < 300000; i++){
-        asm volatile("nop");
-    }
-
     while(1){
-        // gpio_hal_set_level(&gpio_hal, gpio_num, 0);
-        // vTaskDelay(1000 / portTICK_PERIOD_MS);
         ESP_LOGI("Main", "Sending packet");
         respect_raw_tx(&tx_item);
-        gpio_hal_set_level(&gpio_hal, gpio_num, 1);
-        // vTaskDelay(100 / portTICK_PERIOD_MS);
-        // for(long int i = 0; i < 3000000; i++){
-        //     asm volatile("nop");
-        // }
+        for(long int i = 0; i < 6000000; i++){
+            asm volatile("nop");
+        }
     }
 }

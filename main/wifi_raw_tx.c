@@ -97,7 +97,6 @@ uint8_t packet[] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Receiver address
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Transmitter address
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Destination address
-
     
     0x00, 0x00, // sequence control
     0xaa, 0xaa, // SNAP
@@ -177,15 +176,8 @@ static void processTxComplete() {
 
 // esp32-open-mac interrupt handler
 void IRAM_ATTR wifi_interrupt_handler(void){
-    // interrupt_count++;
-    // asm volatile("mret");
-    // return;
-    gpio_hal_context_t gpio_hal = {
-        .dev = GPIO_HAL_GET_HW(GPIO_PORT_0)
-    };
-    
-    gpio_hal_set_level(&gpio_hal, 3, 0);
     uint32_t cause = REG_READ(WIFI_INT_STATUS_GET);
+    ets_printf("In ISR: Cause %lx\n", cause);
 
     if(cause == 0){
         return;
@@ -198,8 +190,6 @@ void IRAM_ATTR wifi_interrupt_handler(void){
     }else{
         // Do nothing for now. process interrupts and failures/collisions
     }
-
-    gpio_hal_set_level(&gpio_hal, 3, 1);
     
     return;
 }
@@ -226,7 +216,6 @@ void respect_mac_init(){
     // ic_mac_init decompilation
     uint32_t mac_val = REG_READ(WIFI_MAC_CTRL);
     REG_WRITE(WIFI_MAC_CTRL, mac_val &  0xff00efff);
-
 }
 
 // Still needs the proprietary task to be running
@@ -309,24 +298,11 @@ void app_main(){
 
     ESP_LOGW("Main", "Sending Raw packets");
 
-    // Killing proprietary wifi task seems to prevent any tx
-#ifndef USE_PROPRIETARY
-
-    // ESP_LOGW("main", "Killing proprietary wifi task (ppTask)");
+    ESP_LOGW("main", "Killing proprietary wifi task (ppTask)");
 	pp_post(0xf, 0); 
+
+    // // Setup our own interrupts
     respect_setup_interrupt();
-
-#endif
-
-    const int gpio_num = 3;
-
-    // Initialize the GPIO
-    gpio_hal_context_t gpio_hal = {
-        .dev = GPIO_HAL_GET_HW(GPIO_PORT_0)
-    };
-    gpio_hal_func_sel(&gpio_hal, gpio_num, PIN_FUNC_GPIO);
-    gpio_hal_output_enable(&gpio_hal, gpio_num);
-    gpio_hal_set_level(&gpio_hal, 3, 1);
 
     ESP_LOGI("Main", "Mac init...");
     respect_mac_init();
@@ -334,8 +310,6 @@ void app_main(){
     while(1){
         ESP_LOGI("Main", "Sending packet");
         respect_raw_tx(&tx_item);
-        for(long int i = 0; i < 6000000; i++){
-            asm volatile("nop");
-        }
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
     }
 }

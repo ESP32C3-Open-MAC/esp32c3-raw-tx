@@ -11,8 +11,8 @@ FreeRTOS is still needed
 #include "freertos/FreeRTOS.h"
 
 // WiFi driver library
-#include "esp_private/wifi.h"
-#include "esp_wifi.h" // Needed for init tasks
+#include "net_setup.h"
+#include "esp_wifi.h"
 
 // Event library
 #include "esp_event.h"
@@ -25,11 +25,6 @@ FreeRTOS is still needed
 #include "rom/ets_sys.h"
 #include "soc/interrupts.h"
 #include "riscv/interrupt.h"
-
-// WDT disabling
-#include "hal/gpio_hal.h"
-
-#include "sdkconfig.h"
 
 // https://docs.espressif.com/projects/esp-idf/en/stable/esp32c3/api-reference/system/intr_alloc.html
 #define RV_EXTERNAL_INT_COUNT 31
@@ -84,8 +79,6 @@ extern intr_handler_item_t s_intr_handlers[1][RV_EXTERNAL_INT_COUNT];
 
 esp_err_t ret;
 
-uint8_t s_retry_num = 0;
-
 volatile int interrupt_count = 0;
 
 // Hand crafted 80211 packet. Currently only visible in airmon-ng
@@ -138,31 +131,9 @@ dma_list_item_t tx_item = {
     .next = NULL
 };
 
-// Event handlers for connecting to the wifi. If event notifies that station is started, perform connection
-// esp_wifi_connect() is part of the blobs
-void event_handler(void *arg, esp_event_base_t event_base,
-                    int32_t event_id, void* event_data)
-{
-    // Check the event base for a WiFi event. If device disconnects, retry until MAX_RETRY is exceeded
-    if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START){
-        ESP_ERROR_CHECK(esp_wifi_connect());
-        printf("event_handler(): Connected...\n");
-    }else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED){
-        if (s_retry_num < MAX_RETRY){
-            printf("Retrying...\n");
-            ESP_ERROR_CHECK(esp_wifi_connect());
-            s_retry_num++;
-        }
-    }
-}
 
 // Process Txqcomplete
 static void processTxComplete() {
-    gpio_hal_context_t gpio_hal = {
-        .dev = GPIO_HAL_GET_HW(GPIO_PORT_0)
-    };
-    gpio_hal_set_level(&gpio_hal, 3, 1);
-
 	uint32_t txq_state_complete = REG_READ(WIFI_TX_STATUS);
 	if (txq_state_complete == 0) {
 		return;
@@ -171,7 +142,6 @@ static void processTxComplete() {
 	uint32_t clear_mask = 1 << slot;
     uint32_t wifi_tx_clr = REG_READ(WIFI_TX_CLR);
 	REG_WRITE(WIFI_TX_CLR,  wifi_tx_clr |= clear_mask);
-    gpio_hal_set_level(&gpio_hal, 3, 0);
 }
 
 // esp32-open-mac interrupt handler
@@ -256,43 +226,7 @@ void respect_raw_tx(dma_list_item_t* tx_item){
 
 void app_main(){
 
-    // Get default configuration for the wifi drivers. See esp_wifi.h for the default config. The config also 
-    // describes the esp32c3 specific OS adapter functions. 
-    // NVS storage of wifi parameters was disabled in the SDKConfig menu.
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    cfg.nvs_enable = false;
-
-    // initialize WiFi. This may have some hardware settings. Part of the .a files
-    ESP_LOGI("main", "Wifi init");
-    ret = esp_wifi_init(&cfg);
-    if(ret != ESP_OK){
-        ESP_LOGE("Main", "Wifi could not be initialized %s", esp_err_to_name(ret));
-    }
-    ESP_LOGI("main", "Wifi init done");
-
-    // Create the event loop to monitor the wifi events such as connecting and station
-    // Declare the handlers for connecting to event.
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_event_handler_instance_t instance_any_id;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
-
-    // // Create WiFi configuration with defined SSID and PASSWORD
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = CONFIG_ESP_WIFI_SSID,
-            .password = CONFIG_ESP_WIFI_PASSWORD,
-        },
-    };
-
-    // Set to station mode. Set the WiFi configuration. Provide wifi interface handle (WIFI_IF_STA)
-    // Start the esp WiFi connection. All are called directly from the blobs
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    net_setup();
 
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
@@ -307,9 +241,18 @@ void app_main(){
     ESP_LOGI("Main", "Mac init...");
     respect_mac_init();
 
+    // char pcWriteBuffer[512];
+
     while(1){
+
+        // vTaskGetRunTimeStats(pcWriteBuffer);
+        // printf("%s\n", pcWriteBuffer);
+
         ESP_LOGI("Main", "Sending packet");
         respect_raw_tx(&tx_item);
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
+        // vTaskDelay(100 / portTICK_PERIOD_MS);
+        for(long int i = 0; i < 30000000; i++){
+            asm volatile("nop");
+        }
     }
 }

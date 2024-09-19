@@ -4,3 +4,5 @@ build/
 temp/
 sdkconfig
 sdkconfig.ci
+freertos/
+riscv/

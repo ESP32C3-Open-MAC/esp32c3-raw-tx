@@ -39,6 +39,32 @@ typedef struct dma_list_item {
 	struct dma_list_item* next;
 } __attribute__((packed,aligned(4))) dma_list_item_t;
 
+// Data types for queueing
+typedef enum {
+	RX_ENTRY,
+	TX_ENTRY
+} hardware_queue_entry_type_t;
+
+typedef struct
+{
+	uint32_t interrupt_received;
+} rx_queue_entry_t;
+
+typedef struct
+{
+	uint8_t* packet;
+	uint32_t len;
+} tx_queue_entry_t;
+
+typedef struct {
+	hardware_queue_entry_type_t type;
+	union {
+		rx_queue_entry_t rx;
+		tx_queue_entry_t tx;
+	} content;
+} hardware_queue_entry_t;
+
+
 // RTOS functions
 extern bool pp_post(uint32_t requestnum, uint32_t argument);
 

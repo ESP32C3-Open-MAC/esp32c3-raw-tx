@@ -7,6 +7,9 @@
 
 #include "esp_log.h"
 #include "rom/ets_sys.h"
+// #include "freertos/queue.h"
+
+#define BUFFER_SIZE 10
 
 // Hand crafted 80211 packet. Currently only visible in airmon-ng
 uint8_t packet[] = {
@@ -17,7 +20,7 @@ uint8_t packet[] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Receiver address
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Transmitter address
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Destination address
-    
+
     0x00, 0x00, // sequence control
     0xaa, 0xaa, // SNAP
     0x03, 0x00, 0x00, 0x00, // other LLC headers
@@ -58,6 +61,11 @@ dma_list_item_t tx_item = {
     .next = NULL
 };
 
+static QueueHandle_t tx_event_q_hdl;
+static StaticQueue_t tx_event_q;
+static uint8_t tx_q_buffer[BUFFER_SIZE * sizeof(hardware_queue_entry_t)];
+static StaticSemaphore_t tx_event_q_sem_buf;
+static SemaphoreHandle_t tx_event_q_sem_hdl;
 
 // Process Txqcomplete
 static void processTxComplete() {
@@ -75,18 +83,21 @@ static void processTxComplete() {
 void IRAM_ATTR wifi_interrupt_handler(void){
     uint32_t cause = REG_READ(WIFI_INT_STATUS_GET);
 
+    // This probably means the power management peripheral triggered
+    // the interrupt as this interrupt is shared between the MAC and PWR peripherals
     if(cause == 0){
         return;
     }
 
-    ets_printf("In ISR: Cause %lx\n", cause);
-
+    ets_printf("In ISR: 0x%lx\n", cause);
     REG_WRITE(WIFI_INT_STATUS_CLR, cause);
-    
-    if(cause & 0x80){
-        processTxComplete();
-    }else{
-        // Do nothing for now. process interrupts and failures/collisions
+
+    volatile bool tmp = pdFALSE;
+    if(xSemaphoreTakeFromISR(tx_event_q_sem_hdl, &tmp) == pdTRUE){
+        hardware_queue_entry_t rx_queue_entry;    
+        rx_queue_entry.type = RX_ENTRY;
+        rx_queue_entry.content.rx.interrupt_received = cause;
+        xQueueSendFromISR(tx_event_q_hdl, &rx_queue_entry, pdFALSE);
     }
     
     return;
@@ -147,7 +158,6 @@ void respect_raw_tx(dma_list_item_t* tx_item){
     // // Configure EDCA
     cfg_val = REG_READ(WIFI_TX_CONFIG);
     cfg_val = cfg_val | 0x02000000;
-    
     cfg_val = cfg_val | 0x00003000;
     REG_WRITE(WIFI_TX_CONFIG, cfg_val);
 
@@ -157,7 +167,18 @@ void respect_raw_tx(dma_list_item_t* tx_item){
     ESP_LOGI("raw_tx", "Enabled TX");
 }
 
+void respect_send_packet(uint8_t *pkt, uint32_t len){
+    // Send the already crafted DMA struct
+    // @todo: Implement proper DMA struct creation
+    respect_raw_tx(&tx_item);
+}
+
 void respect_hardware_task(void* pvParameters){
+
+    // create event queue for sharing of both TX and RX tasks together
+    tx_event_q_hdl = xQueueCreateStatic(BUFFER_SIZE, sizeof(hardware_queue_entry_t), tx_q_buffer, &tx_event_q);
+    tx_event_q_sem_hdl = xQueueCreateCountingSemaphoreStatic(BUFFER_SIZE, BUFFER_SIZE, &tx_event_q_sem_buf);
+
 
     ESP_LOGW("hw_task", "Killing proprietary wifi task (ppTask)");
 	pp_post(0xf, 0); 
@@ -169,19 +190,78 @@ void respect_hardware_task(void* pvParameters){
     respect_setup_interrupt();
     respect_mac_init();
 
-    ESP_LOGI("hw_task", "going into loop mode");
-
     // Do nothing
     // @todo : Process tx/rx queues similar to esp32_open_mac or simply try porting
+    hardware_queue_entry_t queue_entry;
+    uint32_t cause;
+    
     while(1){
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        if(xQueueReceive(tx_event_q_hdl, &queue_entry, 10)){
+            if(queue_entry.type == TX_ENTRY){
+                ESP_LOGI("hw_task", "Sending queued packet");
+                respect_send_packet(queue_entry.content.tx.packet, queue_entry.content.tx.len);
+
+                // Free up the queue resources
+                xSemaphoreGive(tx_event_q_sem_hdl);
+            }else if(queue_entry.type == RX_ENTRY){
+                cause = queue_entry.content.rx.interrupt_received;
+
+                if(cause & 0x80){
+                    // Packet received
+                    ESP_LOGI("hw_task", "TX complete");
+                    processTxComplete();
+                }
+                
+                if(cause & 0x800){
+                    ESP_LOGE("hw_task", "Watchdog panic");
+                }
+                
+                if (cause & 0x600000) {
+					// TODO this is bad, we should reboot
+					ESP_LOGE("hw_task", "something bad, we should reboot");
+				}
+				
+                if (cause & 0x1000024) {
+					ESP_LOGW("hw_task", "received message");					
+				}
+                
+                if (cause & 0x80000) {
+					ESP_LOGE("hw_task", "lmacProcessAllTxTimeout");
+				}
+
+				if (cause & 0x100) {
+					ESP_LOGE("hw_task", "lmacProcessCollisions");
+				}
+
+                xSemaphoreGive(tx_event_q_sem_hdl);
+            }
+        }
+        // Single core processor so suspend task briefly for IDLE task
+        vTaskDelay(50 / portTICK_PERIOD_MS); 
     }
 }
 
+// For now, "MAC layer and above" is just this function queuing a single for tx
 void respect_send_task(void* pvParameters){
     while(1){
         ESP_LOGI("send_task", "Sending packet");
-        respect_raw_tx(&tx_item);
+
+        if(tx_event_q_hdl != NULL){
+            // Put the packet into the queue
+            if(xSemaphoreTake(tx_event_q_sem_hdl, 1) == pdTRUE){
+                hardware_queue_entry_t send_queue_entry;
+                send_queue_entry.type = TX_ENTRY;
+                send_queue_entry.content.tx.len = sizeof(packet);
+                send_queue_entry.content.tx.packet = &packet[0];
+                xQueueSendToFront(tx_event_q_hdl, &send_queue_entry, 0);
+            }else{
+                ESP_LOGW("send_task", "Queue is full!");
+            }
+        }else{
+            ESP_LOGW("send_task", "Queue not yet allocated");
+        }
+
+        // Every second, send one packet
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }

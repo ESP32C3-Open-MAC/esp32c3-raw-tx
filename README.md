@@ -17,15 +17,19 @@ typedef struct dma_list_item {
 
 Registers that have been identified are listed below
 
-|                  |            |
-| ---------------- | ---------- |
-| WIFI_TX_CONFIG   | 0x60033d04 |
-| WIFI_MAC_CTRL    | 0x60033ca0 |
-| WIFI_TX_PLCP0    | 0x60033d08 |
-| WIFI_TX_PLCP1    | 0x600342f8 |
-| WIFI_TX_PLCP1_2  | 0x600342fc |
-| WIFI_TX_PLCP2    | 0x60034314 |
-| WIFI_TX_DURATION | 0x60034318 |
+|                     |            |
+| ------------------- | ---------- |
+| WIFI_TX_CONFIG      | 0x60033d04 |
+| WIFI_MAC_CTRL       | 0x60033ca0 |
+| WIFI_TX_PLCP0       | 0x60033d08 |
+| WIFI_TX_PLCP1       | 0x600342f8 |
+| WIFI_TX_PLCP1_2     | 0x600342fc |
+| WIFI_TX_PLCP2       | 0x60034314 |
+| WIFI_TX_DURATION    | 0x60034318 |
+| WIFI_TX_STATUS      | 0x60033cb0 |
+| WIFI_TX_CLR         | 0x60033cac |
+| WIFI_INT_STATUS_GET | 0x60033c3c |
+| WIFI_INT_STATUS_CLR | 0x60033c40 |
 
 This currently relies on the proprietary wifi thread running in the background for handling interrupts.
 

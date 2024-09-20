@@ -77,6 +77,20 @@ static void processTxComplete() {
 	uint32_t clear_mask = 1 << slot;
     uint32_t wifi_tx_clr = REG_READ(WIFI_TX_CLR);
 	REG_WRITE(WIFI_TX_CLR,  wifi_tx_clr |= clear_mask);
+    REG_WRITE(WIFI_TX_STATUS, txq_state_complete &= ~clear_mask);
+}
+
+// Process Timeouts
+static void processTxTimeouts(){
+    uint32_t wifi_tx_err = (REG_READ(WIFI_TX_GET_ERR) >> 16) & 0xff;
+    if(wifi_tx_err == 0){
+        return;
+    }
+    uint32_t slot = 31 - __builtin_clz(wifi_tx_err);
+    uint32_t clear_mask = 1 << slot;
+    uint32_t wifi_tx_err_clr = REG_READ(WIFI_TX_CLR_ERR);
+    REG_WRITE(WIFI_TX_CLR_ERR, wifi_tx_err_clr |= clear_mask);
+    REG_WRITE(WIFI_TX_GET_ERR, wifi_tx_err &= ~clear_mask);
 }
 
 // esp32-open-mac interrupt handler
@@ -89,7 +103,6 @@ void IRAM_ATTR wifi_interrupt_handler(void){
         return;
     }
 
-    ets_printf("In ISR: 0x%lx\n", cause);
     REG_WRITE(WIFI_INT_STATUS_CLR, cause);
 
     volatile bool tmp = pdFALSE;
@@ -99,6 +112,7 @@ void IRAM_ATTR wifi_interrupt_handler(void){
         rx_queue_entry.content.rx.interrupt_received = cause;
         xQueueSendFromISR(tx_event_q_hdl, &rx_queue_entry, pdFALSE);
     }
+    ets_printf("Returning from ISR with cause %lx\n", cause);
     
     return;
 }
@@ -122,7 +136,8 @@ void respect_setup_interrupt(){
 
     // Unmask the interrupt source again. So called "routing"
     REG_WRITE(INTR_SRC_MAC, WIFI_INTR_NUMBER);
-    REG_WRITE(INTR_SRC_PWR, WIFI_INTR_NUMBER);
+    // Mask this interrupt. Probably needs to be handled better but for now...
+    // REG_WRITE(INTR_SRC_PWR, WIFI_INTR_NUMBER);
 
 }
 
@@ -183,9 +198,6 @@ void respect_hardware_task(void* pvParameters){
     ESP_LOGW("hw_task", "Killing proprietary wifi task (ppTask)");
 	pp_post(0xf, 0); 
 
-    // Yielding for main task to init send task
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-
     // Setup our own interrupts
     respect_setup_interrupt();
     respect_mac_init();
@@ -227,6 +239,7 @@ void respect_hardware_task(void* pvParameters){
                 
                 if (cause & 0x80000) {
 					ESP_LOGE("hw_task", "lmacProcessAllTxTimeout");
+                    processTxTimeouts();
 				}
 
 				if (cause & 0x100) {

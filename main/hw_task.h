@@ -15,8 +15,11 @@
 #define WIFI_TX_DURATION 0x60034318
 #define WIFI_TX_STATUS 0x60033cb0
 #define WIFI_TX_CLR 0x60033cac
+#define WIFI_TX_GET_ERR 0x60033ca8
+#define WIFI_TX_CLR_ERR 0x60033ca4
 #define WIFI_INT_STATUS_GET 0x60033c3c
 #define WIFI_INT_STATUS_CLR 0x60033c40
+
 
 // Intererupt registers
 #define INTR_SRC_MAC 0x600c2000

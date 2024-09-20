@@ -34,6 +34,9 @@ This currently relies on the proprietary wifi thread running in the background f
  - Used Wireshark to identify the repeated UDP packets. Currently only identifiable in monitor mode (TODO).
 
 ## TODO:
- - Port the functionality in the ESP32 Open MAC project by setting up own interrupts.
- - Next goal is to achieve TX independent of the proprietary thread.
- - RX needs to be integrated. Registers not yet identified
+ - [x] Setting up custom interrupts
+ - [x] Adding queues for event management
+ - [ ] Handling of collisions
+ - [ ] Adding custom auth messages. Port from ESP32-Open-MAC
+ - [ ] RX needs to be handled. Identify registers first
+ - [ ] Open sourcing the init function

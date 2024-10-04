@@ -21,6 +21,7 @@
 // Register definitions
 // MAC registers
 #define WIFI_MAC_BASE 0x60033000
+#define WIFI_BASE_RX_DSCR 0x60033088
 #define WIFI_TX_CONFIG 0x60033d04
 #define WIFI_MAC_CTRL 0x60033ca0
 #define WIFI_TX_PLCP0 0x60033d08

@@ -61,6 +61,18 @@ dma_list_item_t tx_item = {
     .next = NULL
 };
 
+uint8_t rx_pkt[1600];
+
+dma_list_item_t rx_item = {
+    .size = 1600,
+    .has_data = 0,
+    .owner = 1,
+    ._unknown = 32,
+    .length = 1600,
+    .packet = &rx_pkt[0],
+    .next = NULL
+};
+
 void print_registers();
 
 static QueueHandle_t tx_event_q_hdl;
@@ -73,6 +85,14 @@ static inline void enable_tx(){
     // Finally enable tx
     uint32_t cfg_val = REG_READ(WIFI_TX_PLCP0);
     REG_WRITE(WIFI_TX_PLCP0, cfg_val | 0xc0000000);
+}
+
+static inline void set_base_rx_addr(dma_list_item_t * addr){
+    REG_WRITE(WIFI_BASE_RX_DSCR, (uint32_t)addr);
+}
+
+static void respect_setup_rx(){
+    set_base_rx_addr(&rx_item);
 }
 
 // Process Txqcomplete
@@ -232,6 +252,17 @@ void respect_send_packet(uint8_t *pkt, uint32_t len){
     respect_raw_tx(&tx_item);
 }
 
+uint32_t respect_rx_packet(){
+    if(rx_item.has_data == 1){
+        print("Dumping data from DMA struct");
+        DUMP_MEMORY(rx_item.packet, rx_item.length);
+        rx_item.has_data = 0; // Clear it for reuse
+        return rx_item.length;
+    }else{
+        return 0;
+    }
+}
+
 void print_registers(){
     PRINT_REGISTER(WIFI_MAC_BASE);
     PRINT_REGISTER(WIFI_TX_CONFIG);
@@ -256,6 +287,7 @@ void respect_hardware_task(void* pvParameters){
 
     // Setup our own interrupts
     respect_setup_interrupt();
+    respect_setup_rx();
     respect_mac_init();
 
     // @todo : Process tx/rx queues similar to esp32_open_mac or simply try porting
@@ -290,6 +322,7 @@ void respect_hardware_task(void* pvParameters){
 				
                 if (cause & 0x1000024) {
 					ESP_LOGW("hw_task", "received message");					
+                    uint32_t len = respect_rx_packet();
 				}
                 
                 if (cause & 0x80000) {

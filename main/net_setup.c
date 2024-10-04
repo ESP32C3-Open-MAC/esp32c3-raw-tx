@@ -21,7 +21,13 @@ esp_err_t respect_wifi_init(){
 
     // Disabling nvs in configuration
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    cfg.static_rx_buf_num = 2; // we won't use these buffers, so reduce the amount from default 10, so we don't waste as much memory
+	// Disable AMPDU and AMSDU for now, we don't support this (yet)
+	cfg.ampdu_rx_enable = false;
+	cfg.ampdu_tx_enable = false;
+	cfg.amsdu_tx_enable = false;
     cfg.nvs_enable = false;
+
     result = esp_wifi_init(&cfg);
     return result;
 

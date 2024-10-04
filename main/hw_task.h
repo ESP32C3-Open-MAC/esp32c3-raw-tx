@@ -4,13 +4,29 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// macro to dump mempry
+#define DUMP_MEMORY(addr, len) {\
+    for(int ii = 0; ii < len; ii++){\
+        printf("%02x ", *(uint8_t *)(addr + ii));\
+    }\
+    printf("\n");\
+}
+
+#define PRINT_REGISTER(_r){\
+    uint32_t _v = REG_READ(_r);\
+    printf("Reg: %x, value: %lx\n", _r, _v);\
+}
+
+
 // Register definitions
 // MAC registers
+#define WIFI_MAC_BASE 0x60033000
 #define WIFI_TX_CONFIG 0x60033d04
 #define WIFI_MAC_CTRL 0x60033ca0
 #define WIFI_TX_PLCP0 0x60033d08
 #define WIFI_TX_PLCP1 0x600342f8
 #define WIFI_TX_PLCP1_2 0x600342fc
+#define WIFI_TX_HTSIG 0x60034310
 #define WIFI_TX_PLCP2 0x60034314
 #define WIFI_TX_DURATION 0x60034318
 #define WIFI_TX_STATUS 0x60033cb0
@@ -19,12 +35,15 @@
 #define WIFI_TX_CLR_ERR 0x60033ca4
 #define WIFI_INT_STATUS_GET 0x60033c3c
 #define WIFI_INT_STATUS_CLR 0x60033c40
+#define PWR_INT_STATUS_GET 0x60035118
+#define PWR_INT_STATUS_CLR 0x6003511c
+#define WIFI_MAC_CCA_REG 0x60033c50
 
 
 // Intererupt registers
 #define INTR_SRC_MAC 0x600c2000
 #define INTR_SRC_PWR 0x600c2008
-#define INTR_ENABLE_REG 0x600c2104 // Writing a 1 to corresponding enables and writing 0 disables
+#define INTR_ENABLE_REG 0x600c2104 // Writing a 1 to corresponding bit enables and writing 0 disables
 #define INTR_STATUS_REG 0x600c00F8
 
 #define WIFI_INTR_NUMBER 1

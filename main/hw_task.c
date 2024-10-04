@@ -17,9 +17,9 @@ uint8_t packet[] = {
     0x00, 0x00, // duration/ID
 
     // Replace with required MAC addresses
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Receiver address
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Transmitter address
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Destination address
+    0x40, 0x9b, 0xcd, 0x25, 0x2a, 0xf8, // Receiver address
+    0x84, 0xf7, 0x03, 0x60, 0x81, 0x5c, // Transmitter address
+    0xc8, 0x15, 0x4e, 0xd4, 0x65, 0x1b, // Destination address
 
     0x00, 0x00, // sequence control
     0xaa, 0xaa, // SNAP
@@ -61,14 +61,24 @@ dma_list_item_t tx_item = {
     .next = NULL
 };
 
+void print_registers();
+
 static QueueHandle_t tx_event_q_hdl;
 static StaticQueue_t tx_event_q;
 static uint8_t tx_q_buffer[BUFFER_SIZE * sizeof(hardware_queue_entry_t)];
 static StaticSemaphore_t tx_event_q_sem_buf;
 static SemaphoreHandle_t tx_event_q_sem_hdl;
 
+static inline void enable_tx(){
+    // Finally enable tx
+    uint32_t cfg_val = REG_READ(WIFI_TX_PLCP0);
+    REG_WRITE(WIFI_TX_PLCP0, cfg_val | 0xc0000000);
+}
+
 // Process Txqcomplete
 static void processTxComplete() {
+    // Set longer timeout
+
 	uint32_t txq_state_complete = REG_READ(WIFI_TX_STATUS);
 	if (txq_state_complete == 0) {
 		return;
@@ -80,39 +90,75 @@ static void processTxComplete() {
     REG_WRITE(WIFI_TX_STATUS, txq_state_complete &= ~clear_mask);
 }
 
-// Process Timeouts
+// Process Timeouts. Ideally shouldn't happen but why does it occur on crowded channel?
 static void processTxTimeouts(){
-    uint32_t wifi_tx_err = (REG_READ(WIFI_TX_GET_ERR) >> 16) & 0xff;
+    uint32_t wifi_tx_err = REG_READ(WIFI_TX_GET_ERR);
+    wifi_tx_err = (wifi_tx_err >> 16) && 0xff;
     if(wifi_tx_err == 0){
         return;
     }
     uint32_t slot = 31 - __builtin_clz(wifi_tx_err);
-    uint32_t clear_mask = 1 << slot;
+    uint32_t clear_mask = (1 << slot);
+    
+    // See espressif timeout handler
+    // Request CCA and wait for the length of 8 OFDM symbols (?)
+    uint32_t cca_value = (REG_READ(WIFI_MAC_CCA_REG) & 0x3fffffff) | (3 << 30);
+    REG_WRITE(WIFI_MAC_CCA_REG, cca_value);
+    ets_delay_us(16);
+
+    // Set the txq to be invalid
+    uint32_t plcp0_value = REG_READ(WIFI_TX_PLCP0);
+    // Check for validity
+    uint32_t is_valid = (plcp0_value >> 30) & 0x01;
+
+    // Reset CCA to zero (why)
+    cca_value = REG_READ(WIFI_MAC_CCA_REG) & 0x3fffffff;
+    REG_WRITE(WIFI_MAC_CCA_REG, cca_value);
+
+    // Disable tx
+    if(is_valid){
+        REG_WRITE(WIFI_TX_PLCP0, plcp0_value & 0x3fffffff);
+        // enable_tx();
+    }
+
     uint32_t wifi_tx_err_clr = REG_READ(WIFI_TX_CLR_ERR);
-    REG_WRITE(WIFI_TX_CLR_ERR, wifi_tx_err_clr |= clear_mask);
-    REG_WRITE(WIFI_TX_GET_ERR, wifi_tx_err &= ~clear_mask);
+    REG_WRITE(WIFI_TX_CLR_ERR, (wifi_tx_err_clr & 0xff00ffff) | (clear_mask << 16));
+}
+
+// only needed to handle the power interrupt
+static void unblock_txq(void){
+    uint32_t value = REG_READ(WIFI_TX_CONFIG);
+    REG_WRITE(WIFI_TX_CONFIG, value & 0xfff1ffff);
 }
 
 // esp32-open-mac interrupt handler
 void IRAM_ATTR wifi_interrupt_handler(void){
-    uint32_t cause = REG_READ(WIFI_INT_STATUS_GET);
+    uint32_t mac_cause = REG_READ(WIFI_INT_STATUS_GET);
+    // uint32_t pwr_cause = REG_READ(PWR_INT_STATUS_GET);
 
     // This probably means the power management peripheral triggered
     // the interrupt as this interrupt is shared between the MAC and PWR peripherals
-    if(cause == 0){
+    // if((mac_cause | pwr_cause) == 0){
+    if(mac_cause == 0){
+        // ets_printf("No cause ISR\n");
         return;
     }
 
-    REG_WRITE(WIFI_INT_STATUS_CLR, cause);
+    REG_WRITE(WIFI_INT_STATUS_CLR, mac_cause);
+    // REG_WRITE(PWR_INT_STATUS_CLR, pwr_cause);
 
     volatile bool tmp = pdFALSE;
     if(xSemaphoreTakeFromISR(tx_event_q_sem_hdl, &tmp) == pdTRUE){
         hardware_queue_entry_t rx_queue_entry;    
         rx_queue_entry.type = RX_ENTRY;
-        rx_queue_entry.content.rx.interrupt_received = cause;
+        // if(mac_cause == 0){
+            // rx_queue_entry.content.rx.interrupt_received = pwr_cause;
+        // }else{
+        rx_queue_entry.content.rx.interrupt_received = mac_cause;
+        // }
         xQueueSendFromISR(tx_event_q_hdl, &rx_queue_entry, pdFALSE);
     }
-    ets_printf("Returning from ISR with cause %lx\n", cause);
+    ets_printf("Returning from ISR with mac cause %lx\n", mac_cause);
     
     return;
 }
@@ -136,7 +182,7 @@ void respect_setup_interrupt(){
 
     // Unmask the interrupt source again. So called "routing"
     REG_WRITE(INTR_SRC_MAC, WIFI_INTR_NUMBER);
-    // Mask this interrupt. Probably needs to be handled better but for now...
+    // Mask this interrupt for now. Results in a constant interval interrupt at what seems to be the TBTT
     // REG_WRITE(INTR_SRC_PWR, WIFI_INTR_NUMBER);
 
 }
@@ -162,10 +208,11 @@ void respect_raw_tx(dma_list_item_t* tx_item){
     uint32_t is_n_enabled = (rate >= 16);
 
     REG_WRITE(WIFI_TX_PLCP1, 0x10000000 | (tx_item->length & 0xfff) | ((rate & 0x1f) << 12) | ((is_n_enabled & 0b1) << 25));
-    REG_WRITE(WIFI_TX_PLCP1_2, 0x0010000);
+    REG_WRITE(WIFI_TX_PLCP1_2, 0x00100000);
 
     // Write 0x00000020 (why?)
-    REG_WRITE(WIFI_TX_PLCP2, 0x00000020);
+    cfg_val = REG_READ(WIFI_TX_PLCP2);
+    REG_WRITE(WIFI_TX_PLCP2, (cfg_val & (0xffffc03f | 0x00000020))); // Using the proprietary code
     
     // Duration to 0 (Why?)
     REG_WRITE(WIFI_TX_DURATION, 0x00);
@@ -173,19 +220,29 @@ void respect_raw_tx(dma_list_item_t* tx_item){
     // // Configure EDCA
     cfg_val = REG_READ(WIFI_TX_CONFIG);
     cfg_val = cfg_val | 0x02000000;
-    cfg_val = cfg_val | 0x00003000;
+    cfg_val = cfg_val & (0xffffefff & 0x00003000);
     REG_WRITE(WIFI_TX_CONFIG, cfg_val);
 
-    // Finally enable tx
-    cfg_val = REG_READ(WIFI_TX_PLCP0);
-    REG_WRITE(WIFI_TX_PLCP0, cfg_val | 0xc0000000);
-    ESP_LOGI("raw_tx", "Enabled TX");
+    enable_tx();
 }
 
 void respect_send_packet(uint8_t *pkt, uint32_t len){
     // Send the already crafted DMA struct
-    // @todo: Implement proper DMA struct creation
+    // @todo: Implement proper DMA struct creation (MAC layer)
     respect_raw_tx(&tx_item);
+}
+
+void print_registers(){
+    PRINT_REGISTER(WIFI_MAC_BASE);
+    PRINT_REGISTER(WIFI_TX_CONFIG);
+    PRINT_REGISTER(WIFI_MAC_CTRL);
+    PRINT_REGISTER(WIFI_TX_PLCP0);
+    PRINT_REGISTER(WIFI_TX_PLCP1);
+    PRINT_REGISTER(WIFI_TX_PLCP1_2);
+    PRINT_REGISTER(WIFI_TX_HTSIG);
+    PRINT_REGISTER(WIFI_TX_PLCP2);
+    PRINT_REGISTER(WIFI_TX_DURATION);
+    PRINT_REGISTER(WIFI_MAC_CCA_REG);
 }
 
 void respect_hardware_task(void* pvParameters){
@@ -194,7 +251,6 @@ void respect_hardware_task(void* pvParameters){
     tx_event_q_hdl = xQueueCreateStatic(BUFFER_SIZE, sizeof(hardware_queue_entry_t), tx_q_buffer, &tx_event_q);
     tx_event_q_sem_hdl = xQueueCreateCountingSemaphoreStatic(BUFFER_SIZE, BUFFER_SIZE, &tx_event_q_sem_buf);
 
-
     ESP_LOGW("hw_task", "Killing proprietary wifi task (ppTask)");
 	pp_post(0xf, 0); 
 
@@ -202,7 +258,6 @@ void respect_hardware_task(void* pvParameters){
     respect_setup_interrupt();
     respect_mac_init();
 
-    // Do nothing
     // @todo : Process tx/rx queues similar to esp32_open_mac or simply try porting
     hardware_queue_entry_t queue_entry;
     uint32_t cause;
@@ -245,6 +300,13 @@ void respect_hardware_task(void* pvParameters){
 				if (cause & 0x100) {
 					ESP_LOGE("hw_task", "lmacProcessCollisions");
 				}
+                
+                // // For now does not conflict with mac stuff
+                // if (cause & 0x10)
+                // {
+                //     ESP_LOGE("hw_task", "unblock_txq");
+                //     unblock_txq();
+                // }
 
                 xSemaphoreGive(tx_event_q_sem_hdl);
             }

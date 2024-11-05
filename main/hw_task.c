@@ -75,8 +75,9 @@ static void processTxComplete() {
 
 // esp32-open-mac interrupt handler
 void IRAM_ATTR wifi_interrupt_handler(void){
-    uint32_t cause = REG_READ(WIFI_INT_STATUS_GET);
-    ets_printf("In ISR: Cause %lx\n", cause);
+    uint32_t mac_cause = REG_READ(WIFI_INT_STATUS_GET);
+    uint32_t pwr_cause = REG_READ(PWR_INT_STATUS_GET);
+    ets_printf("In ISR: MAC Cause %lx, PWR cause %lx\n", mac_cause, pwr_cause);
     wDev_ProcessFiq();    
     return;
 }

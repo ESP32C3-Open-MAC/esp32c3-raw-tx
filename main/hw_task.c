@@ -47,6 +47,8 @@ uint8_t packet[] = {
 
 };
 
+void wDev_ProcessFiq(void);
+
 // Declare the DMA list item
 dma_list_item_t tx_item = {
     .size = 83,
@@ -74,21 +76,8 @@ static void processTxComplete() {
 // esp32-open-mac interrupt handler
 void IRAM_ATTR wifi_interrupt_handler(void){
     uint32_t cause = REG_READ(WIFI_INT_STATUS_GET);
-
-    if(cause == 0){
-        return;
-    }
-
     ets_printf("In ISR: Cause %lx\n", cause);
-
-    REG_WRITE(WIFI_INT_STATUS_CLR, cause);
-    
-    if(cause & 0x80){
-        processTxComplete();
-    }else{
-        // Do nothing for now. process interrupts and failures/collisions
-    }
-    
+    wDev_ProcessFiq();    
     return;
 }
 
@@ -158,9 +147,6 @@ void respect_raw_tx(dma_list_item_t* tx_item){
 }
 
 void respect_hardware_task(void* pvParameters){
-
-    ESP_LOGW("hw_task", "Killing proprietary wifi task (ppTask)");
-	pp_post(0xf, 0); 
 
     // Yielding for main task to init send task
     vTaskDelay(100 / portTICK_PERIOD_MS);

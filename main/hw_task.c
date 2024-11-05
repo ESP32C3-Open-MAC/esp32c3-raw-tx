@@ -254,7 +254,7 @@ void respect_send_packet(uint8_t *pkt, uint32_t len){
 
 uint32_t respect_rx_packet(){
     if(rx_item.has_data == 1){
-        print("Dumping data from DMA struct");
+        printf("Dumping data from DMA struct");
         DUMP_MEMORY(rx_item.packet, rx_item.length);
         rx_item.has_data = 0; // Clear it for reuse
         return rx_item.length;

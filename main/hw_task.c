@@ -239,8 +239,8 @@ void respect_raw_tx(dma_list_item_t* tx_item){
 
     // // Configure EDCA
     cfg_val = REG_READ(WIFI_TX_CONFIG);
-    cfg_val = cfg_val | 0x02000000;
-    cfg_val = cfg_val & (0xffffefff & 0x00003000);
+    cfg_val = cfg_val | 0x02003000;
+    // cfg_val = cfg_val & (0xffffefff & 0x00003000);
     REG_WRITE(WIFI_TX_CONFIG, cfg_val);
 
     enable_tx();

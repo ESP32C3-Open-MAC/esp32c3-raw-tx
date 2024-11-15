@@ -232,14 +232,15 @@ void respect_raw_tx(dma_list_item_t* tx_item){
 
     // Write 0x00000020 (why?)
     cfg_val = REG_READ(WIFI_TX_PLCP2);
-    REG_WRITE(WIFI_TX_PLCP2, (cfg_val & (0xffffc03f | 0x00000020))); // Using the proprietary code
+    // REG_WRITE(WIFI_TX_PLCP2, (cfg_val & (0xffffc03f | 0x00000020))); // Using the proprietary code
+    REG_WRITE(WIFI_TX_PLCP2, cfg_val | 0x10); // Using the proprietary code
     
     // Duration to 0 (Why?)
     REG_WRITE(WIFI_TX_DURATION, 0x00);
 
     // // Configure EDCA
     cfg_val = REG_READ(WIFI_TX_CONFIG);
-    cfg_val = cfg_val | 0x02003000;
+    cfg_val = cfg_val | 0x02000000;
     // cfg_val = cfg_val & (0xffffefff & 0x00003000);
     REG_WRITE(WIFI_TX_CONFIG, cfg_val);
 

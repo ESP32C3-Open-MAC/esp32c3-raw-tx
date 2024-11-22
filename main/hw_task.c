@@ -17,9 +17,9 @@ uint8_t packet[] = {
     0x00, 0x00, // duration/ID
 
     // Replace with required MAC addresses
-    0x40, 0x9b, 0xcd, 0x25, 0x2a, 0xf8, // Receiver address
-    0x84, 0xf7, 0x03, 0x60, 0x81, 0x5c, // Transmitter address
-    0xc8, 0x15, 0x4e, 0xd4, 0x65, 0x1b, // Destination address
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Receiver address
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Transmitter address
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Destination address
 
     0x00, 0x00, // sequence control
     0xaa, 0xaa, // SNAP
@@ -283,8 +283,8 @@ void respect_hardware_task(void* pvParameters){
     tx_event_q_hdl = xQueueCreateStatic(BUFFER_SIZE, sizeof(hardware_queue_entry_t), tx_q_buffer, &tx_event_q);
     tx_event_q_sem_hdl = xQueueCreateCountingSemaphoreStatic(BUFFER_SIZE, BUFFER_SIZE, &tx_event_q_sem_buf);
 
-    ESP_LOGW("hw_task", "Killing proprietary wifi task (ppTask)");
-	pp_post(0xf, 0); 
+    // ESP_LOGW("hw_task", "Killing proprietary wifi task (ppTask)");
+	// pp_post(0xf, 0);
 
     // Setup our own interrupts
     respect_setup_interrupt();
